@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import {
   Package, Plus, Edit2, Trash2, Save, X, ShoppingBag,
   TrendingUp, BarChart2, CheckCircle, Clock, XCircle, FlaskConical,
-  TestTube, Beaker, Recycle, Atom, Layers
+  TestTube, Beaker, Recycle, Atom, Layers, Users, MapPin, Trophy
 } from 'lucide-react';
 import {
   collection, getDocs, addDoc, updateDoc, deleteDoc, doc, orderBy, query
@@ -31,7 +31,182 @@ const STATUS_STYLES = {
   cancelled: { bg: '#fee2e2', color: '#b91c1c', icon: <XCircle size={13} /> },
 };
 
-const EMPTY_PRODUCT = { name: '', desc: '', category: 'Chemical', icon: 'Package', price: '', lot: '', label: '' };
+const NUTRIENT_FIELDS = ['N', 'P2O5', 'K2O', 'S', 'Zn', 'B'];
+const EMPTY_PRODUCT = { name: '', desc: '', category: 'Chemical', icon: 'Package', price: '', bagWeightKg: '', lot: '', label: '', N: 0, P2O5: 0, K2O: 0, S: 0, Zn: 0, B: 0, availability: 'high', applicationMethod: '', notes: '' };
+
+function StatsTab({ orders, products }) {
+  const [revPeriod, setRevPeriod] = useState('daily');
+
+  const activeOrders = orders.filter(o => o.status !== 'cancelled');
+  const totalRevenue = activeOrders.reduce((s, o) => s + (o.total || 0), 0);
+  const shippedCount = orders.filter(o => o.status === 'confirmed').length;
+  const deliveredCount = orders.filter(o => o.status === 'delivered').length;
+
+  // unique customers by email/phone
+  const customers = new Set(orders.map(o => o.delivery?.phone || o.userId)).size;
+
+  // Revenue over time
+  function getRevenueBuckets() {
+    const buckets = {};
+    activeOrders.forEach(o => {
+      const d = o.createdAt?.toDate ? o.createdAt.toDate() : null;
+      if (!d) return;
+      let key;
+      if (revPeriod === 'daily') key = d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short' });
+      else if (revPeriod === 'weekly') {
+        const wk = Math.ceil(d.getDate() / 7);
+        key = `W${wk} ${d.toLocaleDateString('en-IN', { month: 'short' })}`;
+      } else key = d.toLocaleDateString('en-IN', { month: 'short', year: '2-digit' });
+      buckets[key] = (buckets[key] || 0) + (o.total || 0);
+    });
+    return Object.entries(buckets).slice(-10);
+  }
+  const revBuckets = getRevenueBuckets();
+  const maxRev = Math.max(...revBuckets.map(([, v]) => v), 1);
+
+  // Top selling products
+  const topProducts = products.map(p => ({
+    ...p,
+    sold: activeOrders.flatMap(o => o.items || []).filter(i => i.id === p.id).reduce((s, i) => s + (i.qty || 0), 0)
+  })).sort((a, b) => b.sold - a.sold).slice(0, 5);
+  const maxSold = Math.max(...topProducts.map(p => p.sold), 1);
+
+  // Customer acquisition by month
+  const acqMap = {};
+  orders.forEach(o => {
+    const d = o.createdAt?.toDate ? o.createdAt.toDate() : null;
+    if (!d) return;
+    const key = d.toLocaleDateString('en-IN', { month: 'short', year: '2-digit' });
+    acqMap[key] = (acqMap[key] || new Set());
+    acqMap[key].add(o.delivery?.phone || o.userId || o.id);
+  });
+  const acqBuckets = Object.entries(acqMap).map(([k, s]) => [k, s.size]).slice(-8);
+  const maxAcq = Math.max(...acqBuckets.map(([, v]) => v), 1);
+
+  // Orders by state
+  const stateMap = {};
+  orders.forEach(o => {
+    const state = o.delivery?.state || 'Unknown';
+    stateMap[state] = (stateMap[state] || 0) + 1;
+  });
+  const stateBuckets = Object.entries(stateMap).sort((a, b) => b[1] - a[1]).slice(0, 6);
+  const maxState = Math.max(...stateBuckets.map(([, v]) => v), 1);
+
+  const summaryCards = [
+    { label: 'Total Orders', value: orders.length, color: '#2d5a1b' },
+    { label: 'Total Revenue', value: `₹${totalRevenue.toLocaleString('en-IN')}`, color: '#b45309' },
+    { label: 'Customers', value: customers, color: '#2d5a1b' },
+    { label: 'Products', value: products.length, color: '#2d5a1b' },
+    { label: 'Shipped', value: shippedCount, color: '#2d5a1b' },
+    { label: 'Delivered', value: deliveredCount, color: '#2d5a1b' },
+  ];
+
+  return (
+    <motion.div key="stats" initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}>
+      {/* Summary cards */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(160px,1fr))', gap: 16, marginBottom: 24 }}>
+        {summaryCards.map(s => (
+          <motion.div className="adm-stat" key={s.label} whileHover={{ y: -3 }} style={{ marginBottom: 0 }}>
+            <div className="adm-stat-label">{s.label}</div>
+            <div className="adm-stat-val" style={{ color: s.color }}>{s.value}</div>
+          </motion.div>
+        ))}
+      </div>
+
+      {/* Revenue Over Time */}
+      <div className="adm-card">
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
+          <h2 style={{ margin: 0 }}>📈 Revenue Over Time</h2>
+          <div style={{ display: 'flex', gap: 4 }}>
+            {['daily', 'weekly', 'monthly'].map(p => (
+              <button key={p} onClick={() => setRevPeriod(p)}
+                style={{ padding: '5px 14px', borderRadius: 8, border: 'none', cursor: 'pointer', fontWeight: 700, fontSize: '.78rem',
+                  background: revPeriod === p ? '#2d5a1b' : '#f0fae8', color: revPeriod === p ? '#fff' : '#5a7a4a' }}>
+                {p.charAt(0).toUpperCase() + p.slice(1)}
+              </button>
+            ))}
+          </div>
+        </div>
+        {revBuckets.length === 0
+          ? <p style={{ color: '#8ab87a', textAlign: 'center', padding: '32px 0' }}>No revenue data yet</p>
+          : <div style={{ display: 'flex', alignItems: 'flex-end', gap: 8, height: 160, paddingBottom: 24, position: 'relative' }}>
+              {revBuckets.map(([label, val], i) => (
+                <div key={label} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4 }}>
+                  <span style={{ fontSize: '.65rem', color: '#8ab87a', fontWeight: 700 }}>₹{val >= 1000 ? `${(val/1000).toFixed(1)}k` : val}</span>
+                  <motion.div initial={{ height: 0 }} animate={{ height: `${(val / maxRev) * 120}px` }}
+                    transition={{ duration: 0.6, delay: i * 0.05 }}
+                    style={{ width: '100%', background: 'linear-gradient(180deg,#2d5a1b,#5cb85c)', borderRadius: '6px 6px 0 0', minHeight: 4 }} />
+                  <span style={{ fontSize: '.6rem', color: '#aaa', textAlign: 'center', lineHeight: 1.2 }}>{label}</span>
+                </div>
+              ))}
+            </div>
+        }
+      </div>
+
+      {/* Top Products + Customer Acquisition */}
+      <div className="adm-cols" style={{ marginBottom: 24 }}>
+        <div className="adm-card" style={{ marginBottom: 0 }}>
+          <h2>🏆 Top Selling Products</h2>
+          {topProducts.every(p => p.sold === 0)
+            ? <p style={{ color: '#8ab87a', textAlign: 'center', padding: '24px 0' }}>No order data yet</p>
+            : topProducts.map((p, i) => (
+                <div key={p.id} style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14 }}>
+                  <span style={{ fontWeight: 900, color: '#8ab87a', width: 18, fontSize: '.8rem' }}>#{i + 1}</span>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '.82rem', fontWeight: 700, marginBottom: 4 }}>
+                      <span>{p.name}</span><span style={{ color: '#2d5a1b' }}>{p.sold} bags</span>
+                    </div>
+                    <div style={{ background: '#f0fae8', borderRadius: 6, height: 8, overflow: 'hidden' }}>
+                      <motion.div initial={{ width: 0 }} animate={{ width: `${(p.sold / maxSold) * 100}%` }}
+                        transition={{ duration: 0.7, delay: i * 0.08 }}
+                        style={{ height: '100%', background: 'linear-gradient(90deg,#2d5a1b,#5cb85c)', borderRadius: 6 }} />
+                    </div>
+                  </div>
+                </div>
+              ))
+          }
+        </div>
+
+        <div className="adm-card" style={{ marginBottom: 0 }}>
+          <h2><Users size={16} /> Customer Acquisition</h2>
+          {acqBuckets.length === 0
+            ? <p style={{ color: '#8ab87a', textAlign: 'center', padding: '24px 0' }}>No data yet</p>
+            : <div style={{ display: 'flex', alignItems: 'flex-end', gap: 8, height: 140, paddingBottom: 20 }}>
+                {acqBuckets.map(([label, val], i) => (
+                  <div key={label} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4 }}>
+                    <span style={{ fontSize: '.65rem', color: '#8ab87a', fontWeight: 700 }}>{val}</span>
+                    <motion.div initial={{ height: 0 }} animate={{ height: `${(val / maxAcq) * 100}px` }}
+                      transition={{ duration: 0.6, delay: i * 0.06 }}
+                      style={{ width: '100%', background: 'linear-gradient(180deg,#1d4ed8,#60a5fa)', borderRadius: '6px 6px 0 0', minHeight: 4 }} />
+                    <span style={{ fontSize: '.6rem', color: '#aaa', textAlign: 'center' }}>{label}</span>
+                  </div>
+                ))}
+              </div>
+          }
+        </div>
+      </div>
+
+      {/* Orders by State */}
+      <div className="adm-card">
+        <h2><MapPin size={16} /> Orders by State</h2>
+        {stateBuckets.length === 0
+          ? <p style={{ color: '#8ab87a', textAlign: 'center', padding: '24px 0' }}>No order data yet</p>
+          : stateBuckets.map(([state, count], i) => (
+              <div key={state} style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 14 }}>
+                <span style={{ width: 110, fontSize: '.82rem', fontWeight: 700, color: '#1a2e0f' }}>{state}</span>
+                <div style={{ flex: 1, background: '#f0fae8', borderRadius: 6, height: 10, overflow: 'hidden' }}>
+                  <motion.div initial={{ width: 0 }} animate={{ width: `${(count / maxState) * 100}%` }}
+                    transition={{ duration: 0.7, delay: i * 0.07 }}
+                    style={{ height: '100%', background: 'linear-gradient(90deg,#b45309,#f59e0b)', borderRadius: 6 }} />
+                </div>
+                <span style={{ fontWeight: 700, fontSize: '.82rem', color: '#b45309', minWidth: 28, textAlign: 'right' }}>{count}</span>
+              </div>
+            ))
+        }
+      </div>
+    </motion.div>
+  );
+}
 
 export default function AdminDashboard() {
   const [tab, setTab] = useState('products');
@@ -67,12 +242,12 @@ export default function AdminDashboard() {
   }
 
   function openAdd() { setForm({ ...EMPTY_PRODUCT, lot: nextLot() }); setEditingProduct(null); setShowForm(true); }
-  function openEdit(p) { setForm({ name: p.name, desc: p.desc, category: p.category, icon: p.icon, price: p.price, lot: p.lot, label: p.label || '' }); setEditingProduct(p.id); setShowForm(true); }
+  function openEdit(p) { setForm({ name: p.name, desc: p.desc, category: p.category, icon: p.icon, price: p.price, bagWeightKg: p.bagWeightKg || '', lot: p.lot, label: p.label || '', N: p.N || 0, P2O5: p.P2O5 || 0, K2O: p.K2O || 0, S: p.S || 0, Zn: p.Zn || 0, B: p.B || 0, availability: p.availability || 'high', applicationMethod: Array.isArray(p.applicationMethod) ? p.applicationMethod.join(', ') : (p.applicationMethod || ''), notes: p.notes || '' }); setEditingProduct(p.id); setShowForm(true); }
 
   async function saveProduct() {
     if (!form.name || !form.price || !form.lot) { setMsg('Name, price and lot are required.'); return; }
     setSaving(true);
-    const data = { ...form, price: Number(form.price) };
+    const data = { ...form, price: Number(form.price), bagWeightKg: form.bagWeightKg ? Number(form.bagWeightKg) : null, N: Number(form.N), P2O5: Number(form.P2O5), K2O: Number(form.K2O), S: Number(form.S), Zn: Number(form.Zn), B: Number(form.B), applicationMethod: form.applicationMethod.split(',').map(s => s.trim()).filter(Boolean) };
     if (editingProduct) await updateDoc(doc(db, 'products', editingProduct), data);
     else await addDoc(collection(db, 'products'), data);
     await loadProducts();
@@ -93,6 +268,14 @@ export default function AdminDashboard() {
   async function updateOrderStatus(id, status) {
     await updateDoc(doc(db, 'orders', id), { status });
     setOrders(o => o.map(x => x.id === id ? { ...x, status } : x));
+  }
+
+  async function deleteOrder(id) {
+    if (!confirm('Delete this order? This cannot be undone.')) return;
+    await deleteDoc(doc(db, 'orders', id));
+    setOrders(o => o.filter(x => x.id !== id));
+    setMsg('Order deleted.');
+    setTimeout(() => setMsg(''), 3000);
   }
 
   const totalRevenue = orders.filter(o => o.status !== 'cancelled').reduce((s, o) => s + (o.total || 0), 0);
@@ -245,7 +428,7 @@ export default function AdminDashboard() {
                     <h2><ShoppingBag size={16} /> Orders ({orders.length})</h2>
                     {orders.length === 0 && <p style={{ color: '#8ab87a', textAlign: 'center', padding: '24px 0' }}>No orders yet.</p>}
                     <table className="adm-table">
-                      <thead><tr><th>Customer</th><th>Total</th><th>Date</th><th>Status</th></tr></thead>
+                      <thead><tr><th>Customer</th><th>Total</th><th>Date</th><th>Status</th><th></th></tr></thead>
                       <tbody>
                         {orders.map(o => {
                           const st = STATUS_STYLES[o.status] || STATUS_STYLES.pending;
@@ -270,6 +453,11 @@ export default function AdminDashboard() {
                                   <option value="delivered">📦 Delivered</option>
                                   <option value="cancelled">❌ Cancelled</option>
                                 </select>
+                              </td>
+                              <td>
+                                <button className="btn-icon btn-icon-del" onClick={() => deleteOrder(o.id)}>
+                                  <Trash2 size={14} color="#e53e3e" />
+                                </button>
                               </td>
                             </tr>
                           );
@@ -339,45 +527,7 @@ export default function AdminDashboard() {
             )}
 
             {tab === 'stats' && (
-              <motion.div key="stats" initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}>
-                <div className="adm-cols">
-                  {/* Left: summary stats */}
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-                    {[
-                      { label: 'Total Products', value: products.length, color: '#2d5a1b' },
-                      { label: 'Total Orders', value: orders.length, color: '#1d4ed8' },
-                      { label: 'Delivered', value: deliveredCount, color: '#059669' },
-                      { label: 'Cancelled', value: orders.filter(o => o.status === 'cancelled').length, color: '#b91c1c' },
-                    ].map(s => (
-                      <motion.div className="adm-stat" key={s.label} whileHover={{ y: -3 }} style={{ marginBottom: 0 }}>
-                        <div className="adm-stat-label">{s.label}</div>
-                        <div className="adm-stat-val" style={{ color: s.color }}>{s.value}</div>
-                      </motion.div>
-                    ))}
-                  </div>
-                  {/* Right: top products */}
-                  <div className="adm-card" style={{ marginBottom: 0 }}>
-                    <h2><BarChart2 size={16} /> Top Products by Units Sold</h2>
-                    {topProducts.length === 0 && <p style={{ color: '#8ab87a' }}>No order data yet.</p>}
-                    {topProducts.map((p, i) => (
-                      <div key={p.id} style={{ display: 'flex', alignItems: 'center', gap: 14, marginBottom: 16 }}>
-                        <span style={{ fontWeight: 900, color: '#8ab87a', width: 20 }}>#{i + 1}</span>
-                        <span style={{ color: '#2d5a1b' }}><ProductIcon iconName={p.icon} size={18} /></span>
-                        <div style={{ flex: 1 }}>
-                          <div style={{ fontWeight: 700, fontSize: '.9rem', marginBottom: 4 }}>{p.name}</div>
-                          <div style={{ background: '#f0fae8', borderRadius: 8, height: 8, overflow: 'hidden' }}>
-                            <motion.div initial={{ width: 0 }}
-                              animate={{ width: topProducts[0].sold > 0 ? `${(p.sold / topProducts[0].sold) * 100}%` : '0%' }}
-                              transition={{ duration: 0.8, delay: i * 0.1 }}
-                              style={{ height: '100%', background: 'linear-gradient(90deg,#2d5a1b,#5cb85c)', borderRadius: 8 }} />
-                          </div>
-                        </div>
-                        <span style={{ fontWeight: 700, fontSize: '.85rem', color: '#2d5a1b', minWidth: 60, textAlign: 'right' }}>{p.sold} bags</span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              </motion.div>
+              <StatsTab orders={orders} products={products} />
             )}
           </AnimatePresence>
         </div>
@@ -415,8 +565,14 @@ export default function AdminDashboard() {
                   </select>
                 </div>
                 <div className="adm-field">
-                  <label>Price (₹) *</label>
+                  <label>Price (₹/bag) *</label>
                   <input type="number" value={form.price} onChange={e => setForm(f => ({ ...f, price: e.target.value }))} placeholder="0" />
+                </div>
+              </div>
+              <div className="adm-form-row">
+                <div className="adm-field">
+                  <label>Bag Weight (kg)</label>
+                  <input type="number" min="0.1" step="0.1" value={form.bagWeightKg} onChange={e => setForm(f => ({ ...f, bagWeightKg: e.target.value }))} placeholder="e.g. 50" />
                 </div>
               </div>
               <div className="adm-form-row">
@@ -435,6 +591,34 @@ export default function AdminDashboard() {
                     <option value="sale">Sale</option>
                   </select>
                 </div>
+              </div>
+              <div style={{ fontSize: '.75rem', fontWeight: 800, color: '#2d5a1b', textTransform: 'uppercase', letterSpacing: '.5px', margin: '8px 0' }}>Nutrient Content (%) — for soil analysis</div>
+              <div className="adm-form-row">
+                {NUTRIENT_FIELDS.map(n => (
+                  <div className="adm-field" key={n}>
+                    <label>{n}</label>
+                    <input type="number" min="0" max="100" step="0.1" value={form[n]}
+                      onChange={e => setForm(f => ({ ...f, [n]: e.target.value }))} placeholder="0" />
+                  </div>
+                ))}
+              </div>
+              <div className="adm-form-row">
+                <div className="adm-field">
+                  <label>Availability</label>
+                  <select value={form.availability} onChange={e => setForm(f => ({ ...f, availability: e.target.value }))}>
+                    <option value="high">High</option>
+                    <option value="medium">Medium</option>
+                    <option value="low">Low</option>
+                  </select>
+                </div>
+                <div className="adm-field">
+                  <label>Application Method</label>
+                  <input value={form.applicationMethod} onChange={e => setForm(f => ({ ...f, applicationMethod: e.target.value }))} placeholder="basal, foliar, fertigation" />
+                </div>
+              </div>
+              <div className="adm-field">
+                <label>Notes</label>
+                <textarea value={form.notes} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} rows={2} placeholder="Usage guidance..." />
               </div>
               <div className="adm-form-btns">
                 <button className="btn-cancel" onClick={() => setShowForm(false)}><X size={14} style={{ marginRight: 4 }} />Cancel</button>
